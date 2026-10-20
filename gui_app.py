@@ -265,9 +265,8 @@ def _login_flow():
         push_log("请用手机「抖音 / 汽水音乐」App 扫一扫页面二维码，在手机端点击「确认登录」。")
         push_log("登录完成后点【重抓歌单(换账号)】以重建当前账号歌单与数据。")
     else:
-        push_log("未能启动专用浏览器，请手动运行：")
-        push_log('  "%s" --remote-debugging-port=%d --user-data-dir=%s'
-                 % (UA.MS_EDGE_CANDIDATES[0], UA.PORT, UA.CDP_USER_DATA))
+        for line in UA.cdp_manual_hint().split("\n"):
+            push_log(line)
 
 
 def _logout_flow():
@@ -289,22 +288,15 @@ def _watchdog():
 
 
 def _launch_edge(url):
-    candidates = [
-        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-    ]
-    for c in candidates:
-        if os.path.exists(c):
-            try:
-                subprocess.Popen([c, "--app=%s" % url, "--window-size=1280,860"])
-                return True
-            except Exception as e:
-                glog("launch edge err", e)
-    try:
-        webbrowser.open(url)
-        return False
-    except Exception:
-        return False
+    """多浏览器兜底：Edge / Chrome / Chromium / Brave / 360 / QQ，都打不开就用系统默认浏览器。"""
+    ok = UA.launch_app_window(url)
+    glog("launch browser ok=%s" % ok)
+    if not ok:
+        try:
+            webbrowser.open(url)
+        except Exception:
+            pass
+    return ok
 
 
 def main():

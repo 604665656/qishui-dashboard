@@ -19,24 +19,45 @@
 
 用法：python update_all.py [--reinit]
 """
-import json, os, sys, time, datetime, csv, urllib.request, urllib.error, subprocess
+import json, os, sys, time, datetime, csv, tempfile, urllib.request, urllib.error, subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import acctpath  # 账号隔离：accounts/{uid}/
 
 BASE = (os.path.dirname(sys.executable) if getattr(sys, "frozen", False)
          else os.path.dirname(os.path.abspath(__file__)))
 ACCT_DIR = BASE  # 当前账号数据目录；run_update 取得 uid 后会重设为 accounts/{uid}
-PORT = 9222
-CDP_HTTP = f"http://127.0.0.1:{PORT}"
+PORT = 9222                      # 首选调试端口
+CDP_PORTS = [9222, 9223, 9333]   # 端口被占用时依次尝试
+_ACTIVE_PORT = [PORT]            # 当前实际在用的端口（可变）
+
+
+def cdp_http(port=None):
+    return "http://127.0.0.1:%d" % (port or _ACTIVE_PORT[0])
+
+
+CDP_HTTP = cdp_http()            # 兼容旧引用
 SETTLE_API = "https://music.douyin.com/console/api/v1/settlement/statement"
 DETAIL_DIR = os.path.join(BASE, "结算明细")  # run_update 会按账号重设并创建
 
+
 # 专用浏览器（CDP）配置：登录/退出都作用于这个独立 profile
-CDP_USER_DATA = r"C:\edge-cdp"
-MS_EDGE_CANDIDATES = [
-    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-]
+def _default_cdp_user_data():
+    """挑一个当前用户一定写得进的 profile 目录。
+    旧版固定 C:\\edge-cdp，很多电脑（无管理员权限 / C 盘根目录受限）创建失败，
+    导致『未能启动专用浏览器』。这里：旧目录已存在且可写就沿用（保住旧登录态），
+    否则退到 %LOCALAPPDATA%\\QishuiCDP。"""
+    old = r"C:\edge-cdp"
+    try:
+        if os.path.isdir(old) and os.access(old, os.W_OK):
+            return old
+    except Exception:
+        pass
+    base = (os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+            or tempfile.gettempdir())
+    return os.path.join(base, "QishuiCDP")
+
+
+CDP_USER_DATA = _default_cdp_user_data()
 LOGIN_URL = "https://music.douyin.com/"  # 汽水音乐网页版（直接展示扫码登录二维码）
 ACCOUNT_JSON = os.path.join(BASE, "account.json")
 
@@ -52,20 +73,104 @@ def log(*a):
     s = " ".join(str(x) for x in a); print(s, flush=True); LOG.append(s)
 
 
-def http_get_json(path):
-    return json.loads(urllib.request.urlopen(CDP_HTTP + path, timeout=10).read())
+def http_get_json(path, port=None, timeout=8):
+    return json.loads(urllib.request.urlopen(cdp_http(port) + path, timeout=timeout).read())
 
 
-def discover_ws():
+def discover_ws(port=None):
     try:
-        return http_get_json("/json/version").get("webSocketDebuggerUrl")
+        return http_get_json("/json/version", port, timeout=3).get("webSocketDebuggerUrl")
     except Exception:
         return None
+
+
+def active_cdp_port():
+    """扫描候选端口，返回已经开着的 CDP 端口；没有则 None。"""
+    for p in CDP_PORTS:
+        if discover_ws(p):
+            _ACTIVE_PORT[0] = p
+            return p
+    return None
+
+
+# ---------------- 浏览器探测：Edge / Chrome / Chromium / Brave / 360 / QQ 等 ----------------
+def _reg_app_path(exe_name):
+    """从注册表 App Paths 读浏览器真实安装路径（比硬编码可靠）。"""
+    try:
+        import winreg
+    except Exception:
+        return None
+    subs = [
+        (winreg.HKEY_LOCAL_MACHINE,
+         r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\%s" % exe_name),
+        (winreg.HKEY_LOCAL_MACHINE,
+         r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\%s" % exe_name),
+        (winreg.HKEY_CURRENT_USER,
+         r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\%s" % exe_name),
+    ]
+    for root, sub in subs:
+        try:
+            with winreg.OpenKey(root, sub) as k:
+                val, _ = winreg.QueryValueEx(k, "")
+                if val and os.path.exists(val):
+                    return val
+        except Exception:
+            continue
+    return None
+
+
+def find_browsers():
+    """按优先级返回本机可用的 Chromium 内核浏览器 [(显示名, 路径), ...]。
+    顺序：注册表查到的 → 常见安装路径（Edge → Chrome → Chromium/Brave → 国产）。"""
+    local = os.environ.get("LOCALAPPDATA", "")
+    pf = os.environ.get("ProgramFiles", r"C:\Program Files")
+    pf86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+    out, seen = [], set()
+    for label, exe in (("Edge", "msedge.exe"), ("Chrome", "chrome.exe"),
+                       ("Brave", "brave.exe"), ("Chromium", "chromium.exe"),
+                       ("QQ浏览器", "QQBrowser.exe"), ("360极速浏览器", "360chrome.exe")):
+        p = _reg_app_path(exe)
+        if p:
+            out.append((label, p)); seen.add(p.lower())
+    fixed = [
+        ("Edge", os.path.join(pf86, r"Microsoft\Edge\Application\msedge.exe")),
+        ("Edge", os.path.join(pf, r"Microsoft\Edge\Application\msedge.exe")),
+        ("Edge", os.path.join(local, r"Microsoft\Edge\Application\msedge.exe")),
+        ("Chrome", os.path.join(pf, r"Google\Chrome\Application\chrome.exe")),
+        ("Chrome", os.path.join(pf86, r"Google\Chrome\Application\chrome.exe")),
+        ("Chrome", os.path.join(local, r"Google\Chrome\Application\chrome.exe")),
+        ("Chromium", os.path.join(local, r"Chromium\Application\chrome.exe")),
+        ("Brave", os.path.join(pf, r"BraveSoftware\Brave-Browser\Application\brave.exe")),
+        ("Brave", os.path.join(local, r"BraveSoftware\Brave-Browser\Application\brave.exe")),
+        ("360极速浏览器", os.path.join(local, r"360Chrome\Chrome\Application\360chrome.exe")),
+        ("QQ浏览器", os.path.join(pf86, r"Tencent\QQBrowser\QQBrowser.exe")),
+        ("QQ浏览器", os.path.join(pf, r"Tencent\QQBrowser\QQBrowser.exe")),
+    ]
+    for label, p in fixed:
+        if p and p.lower() not in seen and os.path.exists(p):
+            out.append((label, p)); seen.add(p.lower())
+    return out
+
+
+def cdp_manual_hint():
+    """手动启动专用浏览器的命令提示（按本机实际探测到的浏览器给出）。"""
+    bs = find_browsers()
+    if not bs:
+        return ("未在本机找到 Chrome / Edge 等 Chromium 内核浏览器。"
+                "请先安装 Edge 或 Chrome，再重试。")
+    lines = ["未能自动启动专用浏览器。请任选下面一条命令，复制到「运行」(Win+R) 执行："]
+    for label, p in bs[:3]:
+        lines.append('  [%s] "%s" --remote-debugging-port=%d --user-data-dir="%s"'
+                     % (label, p, _ACTIVE_PORT[0], CDP_USER_DATA))
+    lines.append("浏览器打开后，再回到本工具点【登录账号】。")
+    return "\n".join(lines)
 
 
 # ---------------- CDP 仅用于取 Cookie ----------------
 def get_cookies():
     ws_url = discover_ws()
+    if not ws_url and active_cdp_port():   # 端口换过（9222 被占用）时再确认一次
+        ws_url = discover_ws()
     if not ws_url:
         return None, {}
     from websocket import create_connection
@@ -98,28 +203,72 @@ def get_account_uid(ckm):
 
 
 # ---------------- 账号登录 / 退出（CDP 辅助） ----------------
-def ensure_cdp_edge(open_url=None, wait=20):
-    """确认专用浏览器(CDP)是否已启动；未启动则拉起一个带调试端口的独立 profile。
-    返回 True 表示 127.0.0.1:9222 可用。"""
-    if discover_ws():
+def _port_busy(port):
+    """端口是否被某个已在监听的程序占用（但那不是 CDP）。"""
+    try:
+        import socket
+        with socket.create_connection(("127.0.0.1", port), timeout=0.6):
+            return True
+    except Exception:
+        return False
+
+
+def _try_launch_cdp(exe, port, open_url=None, wait=10):
+    """尝试用某个浏览器打开调试端口，成功返回 True。"""
+    args = [exe, "--remote-debugging-port=%d" % port,
+            "--user-data-dir=%s" % CDP_USER_DATA,
+            "--remote-allow-origins=*",
+            "--no-first-run", "--no-default-browser-check"]
+    if open_url:
+        args.append(open_url)
+    try:
+        proc = subprocess.Popen(args)
+    except Exception:
+        return False
+    for _ in range(wait):
+        time.sleep(1)
+        if discover_ws(port):
+            return True
+    try:
+        proc.terminate()   # 这个浏览器没起来，换下一个
+    except Exception:
+        pass
+    return False
+
+
+def ensure_cdp_edge(open_url=None, wait=10):
+    """确认专用浏览器(CDP)是否已启动；未启动则依次尝试本机可用的
+    Edge / Chrome / Chromium / Brave / 360 / QQ 浏览器，用独立 profile 打开调试端口。
+    返回 True 表示 CDP 可用。"""
+    if active_cdp_port():
         return True
-    for c in MS_EDGE_CANDIDATES:
-        if not os.path.exists(c):
+    bs = find_browsers()
+    if not bs:
+        return False
+    for port in CDP_PORTS:                 # 端口被别的软件占用时换一个
+        if _port_busy(port):               # 端口已被非 CDP 程序占用，别浪费时间等
             continue
-        args = [c, f"--remote-debugging-port={PORT}", f"--user-data-dir={CDP_USER_DATA}",
-                "--remote-allow-origins=*"]
-        if open_url:
-            args.append(open_url)
+        for label, exe in bs:
+            if _try_launch_cdp(exe, port, open_url, wait):
+                _ACTIVE_PORT[0] = port
+                return True
+    return False
+
+
+def launch_app_window(url):
+    """用 --app 模式打开一个无地址栏窗口（看板界面用），多浏览器兜底。"""
+    for label, exe in find_browsers():
         try:
-            subprocess.Popen(args)
+            subprocess.Popen([exe, "--app=%s" % url, "--window-size=1280,860"])
+            return True
         except Exception:
             continue
-        for _ in range(wait):
-            if discover_ws():
-                return True
-            time.sleep(1)
-        return discover_ws() is not None
-    return False
+    try:
+        import webbrowser
+        webbrowser.open(url)
+        return False
+    except Exception:
+        return False
 
 
 def cdp_open_tab(url):
@@ -554,10 +703,9 @@ def run_update(reinit=False):
     """完整流水线（CLI 与 GUI 共用）。返回结果 dict；进度走模块级 log()。"""
     cookies, ckm = get_cookies()
     if not cookies:
-        log("\n[错误] 未检测到 CDP / Cookie。请先启动已登录的 Edge：")
-        log('  "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"')
-        log("    --remote-debugging-port=9222 --user-data-dir=C:\\edge-cdp --remote-allow-origins=*")
-        log("  在该 Edge 登录 music.douyin.com 创作者后台后，再运行本程序。")
+        log("\n[错误] 未检测到 CDP / Cookie（浏览器未开、或未登录创作者后台）。")
+        log("  请先点【登录账号】拉起专用浏览器，在其中登录 music.douyin.com 后再更新。")
+        log(cdp_manual_hint())
         return {"ok": False, "error": "no_cookie"}
     log(f"已取得 Cookie（长度 {len(cookies)}），开始直连接口 ...")
 
@@ -624,8 +772,7 @@ def main():
         if login_account():
             log("已在专用浏览器打开登录页，请扫码/登录；登录完成后运行本程序（或点【重抓歌单】）。")
         else:
-            log("未能启动专用浏览器，请手动运行：")
-            log(f'  "{MS_EDGE_CANDIDATES[0]}" --remote-debugging-port={PORT} --user-data-dir={CDP_USER_DATA} --remote-allow-origins=*')
+            log(cdp_manual_hint())
         return True
     if "--logout" in sys.argv:
         log("=" * 60)
