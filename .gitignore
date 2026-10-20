@@ -1,0 +1,63 @@
+# ===================== 数据 / 个人隐私 / 账号 =====================
+accounts/
+曲库索引.json
+stats_list.json
+overview_stats.json
+overview_1d.json
+qishui_share.html
+state.json
+router_data.json
+catalog.json
+cdp_capture*.json
+cdp_settle*.json
+cdp_detail*.json
+cdp_datacenter.json
+cdp_revenue*.json
+cdp_bill*.json
+*收益*.csv
+*数据总表*.csv
+*曲库清单*.csv
+*歌曲风险排查表*.csv
+*昨日数据*.csv
+
+# 个人联系/赞助二维码（含真实抖音/支付宝/哔哩哔哩 ID），勿上传
+contact_assets.py
+gen_contact_assets.py
+
+# ===================== 音频 / 歌词（版权，禁止上传）=====================
+音乐/
+歌词/
+歌词_纯文本/
+
+# ===================== 构建产物 / 大文件 =====================
+*.exe
+汽水数据看板.html
+汽水数据看板_旧账号付费数据.html
+*.spec
+build_gui/
+build_upd/
+__pycache__/
+_exe_backup/
+
+# ===================== 日志 / 临时 =====================
+*.log
+gui.log
+gui_console.log
+build_gui_run.log
+build_upd_run.log
+build_gui.log
+build_upd.log
+update_run.log
+_tmp*.js
+_tmp*.txt
+
+# ===================== 其它 =====================
+output/
+.DS_Store
+
+# WorkBuddy 内部元数据 / 工作记忆（非项目源码，含内部备注与 uid）
+.workbuddy/
+
+# 零散抓包 JSON（含会话/收益数据，非源码）
+revenue_capture.json
+console.html
