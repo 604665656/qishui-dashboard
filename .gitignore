@@ -61,3 +61,7 @@ output/
 # 零散抓包 JSON（含会话/收益数据，非源码）
 revenue_capture.json
 console.html
+
+# 本地临时脚本 / 备份（含抓取产物与二维码备份，不上传）
+_online_ca.py
+*.py.bak

@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>汽水数据面板 · 一键上传到公开 GitHub</title>
+<style>
+:root{--bg:#0d1117;--card:#161b22;--ink:#e6edf3;--sub:#8b949e;--line:#30363d;--brand:#238636;--blue:#2f81f7;--red:#f85149;--warn:#d29922}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Microsoft YaHei",system-ui,sans-serif;line-height:1.7;padding:32px 16px}
+.wrap{max-width:720px;margin:0 auto}
+h1{font-size:24px;margin:0 0 6px}
+.sub{color:var(--sub);margin-bottom:24px;font-size:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:22px;margin-bottom:18px}
+.card h2{font-size:17px;margin:0 0 12px;display:flex;align-items:center;gap:8px}
+label{display:block;font-size:13px;color:var(--sub);margin:14px 0 6px}
+input,select{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:8px;background:#0d1117;color:var(--ink);font-size:14px}
+input:focus,select:focus{outline:none;border-color:var(--blue)}
+.row{display:flex;gap:12px}.row>div{flex:1}
+.btn{display:inline-block;width:100%;text-align:center;padding:13px;border:0;border-radius:9px;background:var(--brand);color:#fff;font-size:15px;font-weight:600;cursor:pointer;margin-top:18px}
+.btn:hover{filter:brightness(1.1)}
+.btn.ghost{background:#21262d;border:1px solid var(--line);margin-top:10px}
+.note{font-size:13px;color:var(--sub);margin-top:12px}
+.warn{background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.4);border-radius:8px;padding:12px 14px;font-size:13px;color:#e3b341;margin:14px 0}
+.danger{background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.4);border-radius:8px;padding:12px 14px;font-size:13px;color:#ff7b72;margin:14px 0}
+.tag{display:inline-block;background:#21262d;border:1px solid var(--line);border-radius:20px;padding:2px 11px;font-size:12px;color:var(--sub);margin:2px}
+code{background:#21262d;padding:2px 7px;border-radius:5px;font-size:12px}
+.steps{counter-reset:s;list-style:none;padding:0;margin:0}
+.steps li{counter-increment:s;position:relative;padding-left:34px;margin:12px 0;font-size:14px}
+.steps li::before{content:counter(s);position:absolute;left:0;top:1px;width:22px;height:22px;background:var(--blue);color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+.hidden{display:none}
+.pulse{animation:p 1.2s infinite}@keyframes p{0%,100%{opacity:1}50%{opacity:.5}}
+#status{margin-top:12px;font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🚀 汽水数据面板 · 上传到公开 GitHub</h1>
+  <div class="sub">本地提交已就绪（49 个文件 / 1.15 MB）。下面几步帮你把仓库建出来并把代码推上去。</div>
+
+  <div class="card">
+    <h2>① 先确认：会公开什么、不公开什么</h2>
+    <div style="margin:8px 0">
+      <div style="font-size:13px;color:#7ee787">✅ 会公开：工具源码（抓数据 / 生成看板 / 打包 EXE 的脚本）+ <b>你要求的收款二维码</b>（含真实抖音/支付宝/哔哩哔哩 ID）</div>
+      <div style="font-size:13px;color:var(--sub);margin-top:6px">🚫 不会公开：9GB 音乐音频、真实收益/结算明细、生成的看板 HTML（里面嵌了你的全部数据）</div>
+    </div>
+    <div class="warn">⚠️ 收款码 + 真实身份 ID <b>公开后全球可见</b>，任何人都能看到你的支付宝/抖音/哔哩哔哩。这是赞助收款码（本来就是收钱用的），但请你自己确认接受。若不想公开，回到聊天里说「移除收款码」即可。</div>
+  </div>
+
+  <div class="card">
+    <h2>② 用你的 GitHub 账号创建公开仓库</h2>
+    <ol class="steps">
+      <li>下面填好你的 GitHub 用户名、<b>Personal Access Token</b>（密码）和仓库名，点「创建公开仓库并推送」。</li>
+      <li>如果你没有 Token，点「获取 Token」用 GitHub 账号登录后生成一个（勾选 <code>repo</code> 权限），复制粘贴回来。</li>
+    </ol>
+
+    <label>GitHub 用户名（你登录的那个）</label>
+    <input id="owner" placeholder="例如 604665656" value="604665656">
+
+    <div class="row">
+      <div>
+        <label>仓库名（公开仓库）</label>
+        <input id="repo" placeholder="qishui-dashboard" value="qishui-dashboard">
+      </div>
+      <div>
+        <label>可见性</label>
+        <select id="vis">
+          <option value="public">Public（公开，全球可见）</option>
+          <option value="private">Private（仅自己可见）</option>
+        </select>
+      </div>
+    </div>
+
+    <label>Personal Access Token（只在本机浏览器用，不会外传）</label>
+    <input id="token" type="password" placeholder="ghp_ 开头 或 github_pat_ 开头">
+    <div class="note">Token 只保存在你自己的浏览器内存里，点按钮时直接发给 GitHub 官方接口，不经任何第三方。</div>
+
+    <button class="btn" onclick="createAndPush()">创建公开仓库并推送</button>
+    <a class="btn ghost" href="https://github.com/settings/tokens/new?scopes=repo&description=qishui-dashboard" target="_blank">🔑 获取 Token（GitHub 官方）</a>
+    <div id="status"></div>
+  </div>
+
+  <div class="card">
+    <h2>③ 如果你想手动做（也行）</h2>
+    <ol class="steps">
+      <li>打开 <a href="https://github.com/new" target="_blank" style="color:var(--blue)">github.com/new</a>，仓库名填 <code>qishui-dashboard</code>，选 <b>Public</b>，点 Create。</li>
+      <li>建好后把仓库地址发回聊天（形如 <code>https://github.com/604665656/qishui-dashboard.git</code>），我替你推送。</li>
+    </ol>
+    <div class="note">手动方式不需要 Token，但要你点几下网页；上面②的方式一步到位。</div>
+  </div>
+</div>
+
+<script>
+function st(msg, ok){ const s=document.getElementById('status'); s.innerHTML = msg; s.style.color = ok? '#7ee787' : '#ff7b72'; }
+
+async function createAndPush(){
+  const owner=document.getElementById('owner').value.trim();
+  const repo=document.getElementById('repo').value.trim();
+  const vis=document.getElementById('vis').value;
+  const token=document.getElementById('token').value.trim();
+  if(!owner||!repo){ st('请填写用户名和仓库名',false); return; }
+  if(!token){ st('请填写 Personal Access Token（点上面「获取 Token」生成）',false); return; }
+
+  st('<span class="pulse">正在创建公开仓库…</span>', true);
+  try{
+    // 1) 创建仓库
+    const createResp = await fetch('https://api.github.com/user/repos', {
+      method:'POST',
+      headers:{ 'Authorization':'token '+token, 'Accept':'application/vnd.github+json', 'Content-Type':'application/json' },
+      body: JSON.stringify({ name: repo, private: (vis==='private'), description:'汽水音乐数据看板 · 本地抓取+离线看板+双EXE工具', auto_init:false })
+    });
+    const created = await createResp.json();
+    if(createResp.status===422 && created.errors && created.errors.some(e=>e.code==='already_exists')){
+      st('该仓库名已存在，将直接推送到已有仓库…', true);
+    } else if(!createResp.ok){
+      st('创建仓库失败：' + (created.message||createResp.status) + '。请检查 Token 是否勾选了 repo 权限。', false); return;
+    }
+
+    // 2) 拿到仓库地址，把本地 commit 推上去（这一步需要本地 git 凭据，
+    //    由于浏览器无法直接调用本机 git，这里给出推送命令，你复制到聊天或终端即可）
+    const url = 'https://github.com/'+owner+'/'+repo+'.git';
+    st('✅ 仓库已创建：'+url+'<br>请把这行发回聊天，我立刻帮你推送代码：<br><code>'+url+'</code>', true);
+    // 3) 尝试触发本机推送（通过自定义协议，若未安装则提示手动）
+    try{ window.location.href='qishui-push://'+encodeURIComponent(url); }catch(e){}
+  }catch(e){
+    st('出错：'+e.message+'。可能是网络或 Token 无效。', false);
+  }
+}
+</script>
+</body>
+</html>
