@@ -8,17 +8,14 @@ import sys, marshal
 from PyInstaller.archive.readers import CArchiveReader
 
 KEYS = [
-    "find_browsers",            # 多浏览器探测
-    "cdp_manual_hint",          # 新提示
-    "_try_launch_cdp",
-    "launch_app_window",
-    "QishuiCDP",                # profile 目录回退
-    "remote-allow-origins",
-    "chrome.exe",
-    "QQBrowser.exe",
-    "360chrome.exe",
-    "App Paths",                # 注册表探测
-    "未能自动启动专用浏览器",
+    # 本轮新增（适配后台改版）
+    "lunaPlay1d", "fetch_song_list", "最近一日播放", "最近一日日期", "当日播放量",
+    "最近一日(清单口径)", "yest_latest_date", "两套口径不同", "后台歌曲数增加",
+    # CDP 健壮性
+    "suppress_origin", "pick_cdp_port", "find_browsers", "QishuiCDP",
+    "remote-allow-origins", "chrome.exe", "App Paths",
+    # 早前功能（防止 regressions）
+    "contact_assets", "acctpath", "build_dashboard",
 ]
 
 

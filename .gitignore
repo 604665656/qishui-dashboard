@@ -65,3 +65,10 @@ console.html
 # 本地临时脚本 / 备份（含抓取产物与二维码备份，不上传）
 _online_ca.py
 *.py.bak
+
+# 本地备份 / 诊断脚本（不属于仓库源码）
+_backup_before_*/
+.cdp_port
+_diag_*.py
+_run_update_once.py
+_update_*.log

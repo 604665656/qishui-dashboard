@@ -167,18 +167,79 @@ def cdp_manual_hint():
 
 
 # ---------------- CDP 仅用于取 Cookie ----------------
-def get_cookies():
-    ws_url = discover_ws()
-    if not ws_url and active_cdp_port():   # 端口换过（9222 被占用）时再确认一次
-        ws_url = discover_ws()
+def _ws_connect(ws_url, timeout=30):
+    """连接 CDP WebSocket。
+    关键点：必须 suppress_origin（不发送 Origin 头）。新版 Chrome/Edge 对带 Origin 的
+    WS 握手直接 403 拒绝，除非浏览器启动时带了 --remote-allow-origins=*；
+    别人的电脑/手动启动的浏览器往往没带这个参数，这里统一绕开。"""
+    from websocket import create_connection
+    try:
+        return create_connection(ws_url, timeout=timeout, suppress_origin=True)
+    except TypeError:  # 老版本 websocket-client 无此参数
+        return create_connection(ws_url, timeout=timeout)
+
+
+# 记录「本工具自己拉起的专用浏览器」端口，避免误复用别的软件占用的 9222
+CDP_PORT_FILE = os.path.join(BASE, ".cdp_port")
+
+
+def _read_own_port():
+    try:
+        if os.path.exists(CDP_PORT_FILE):
+            with open(CDP_PORT_FILE, encoding="utf-8") as f:
+                p = int(f.read().strip())
+                if p in CDP_PORTS and discover_ws(p):
+                    return p
+    except Exception:
+        pass
+    return None
+
+
+def _save_own_port(port):
+    try:
+        with open(CDP_PORT_FILE, "w", encoding="utf-8") as f:
+            f.write(str(port))
+    except Exception:
+        pass
+
+
+def _port_has_login(port):
+    """该端口上的浏览器是否已登录汽水/抖音（能取到相关 Cookie）。"""
+    try:
+        ck, _ = get_cookies(port)
+        return bool(ck)
+    except Exception:
+        return False
+
+
+def pick_cdp_port():
+    """挑一个真正可用的 CDP 端口，优先级：
+    1) 本工具上次拉起、且现在还活着的专用浏览器
+    2) 某个已登录汽水的浏览器（用户手动启动并登录过的情况）
+    3) 都没有 → 返回 None，由调用方自己拉起"""
+    p = _read_own_port()
+    if p:
+        _ACTIVE_PORT[0] = p
+        return p
+    for port in CDP_PORTS:
+        if discover_ws(port) and _port_has_login(port):
+            _ACTIVE_PORT[0] = port
+            return port
+    return None
+
+
+def get_cookies(port=None):
+    if port is None:
+        port = pick_cdp_port() or _ACTIVE_PORT[0]
+    ws_url = discover_ws(port)
     if not ws_url:
         return None, {}
-    from websocket import create_connection
-    tabs = http_get_json("/json")
+    tabs = http_get_json("/json", port)
     page = next((t for t in tabs if t.get("type") == "page" and t.get("webSocketDebuggerUrl")), None)
     if not page:
         return None, {}
-    ws = create_connection(page["webSocketDebuggerUrl"], timeout=30)
+    _ACTIVE_PORT[0] = port
+    ws = _ws_connect(page["webSocketDebuggerUrl"])
     n = [0]
     def send(m, p=None):
         n[0] += 1; i = n[0]; ws.send(json.dumps({"id": i, "method": m, "params": p or {}})); return i
@@ -240,7 +301,7 @@ def ensure_cdp_edge(open_url=None, wait=10):
     """确认专用浏览器(CDP)是否已启动；未启动则依次尝试本机可用的
     Edge / Chrome / Chromium / Brave / 360 / QQ 浏览器，用独立 profile 打开调试端口。
     返回 True 表示 CDP 可用。"""
-    if active_cdp_port():
+    if pick_cdp_port():                    # 优先：自己拉起过的 / 已登录汽水的那个
         return True
     bs = find_browsers()
     if not bs:
@@ -251,6 +312,7 @@ def ensure_cdp_edge(open_url=None, wait=10):
         for label, exe in bs:
             if _try_launch_cdp(exe, port, open_url, wait):
                 _ACTIVE_PORT[0] = port
+                _save_own_port(port)       # 记住是自己拉起的，下次优先复用
                 return True
     return False
 
@@ -276,8 +338,7 @@ def cdp_open_tab(url):
     ws_url = discover_ws()
     if not ws_url:
         return False
-    from websocket import create_connection
-    ws = create_connection(ws_url, timeout=30)
+    ws = _ws_connect(ws_url)
     try:
         ws.send(json.dumps({"id": 1, "method": "Target.createTarget", "params": {"url": url}}))
         for _ in range(40):
@@ -302,8 +363,7 @@ def cdp_clear_account_cookies(extra_domains=None):
     page = next((t for t in tabs if t.get("type") == "page" and t.get("webSocketDebuggerUrl")), None)
     if not page:
         return 0
-    from websocket import create_connection
-    ws = create_connection(page["webSocketDebuggerUrl"], timeout=30)
+    ws = _ws_connect(page["webSocketDebuggerUrl"])
     try:
         nid = [0]
         def send(m, p=None):
@@ -499,8 +559,53 @@ def load_song_ids():
     return [it["track_id"] for it in lib]
 
 
+def fetch_song_list(cookies, log_prefix="    "):
+    """翻页抓取全部歌曲清单，返回 {metaSongId: song}。
+    后台改版后列表直接带「最近一日播放」lunaPlay1d（比概览 period=1 更新一天），
+    且一次翻页就能拿全，不必逐首请求。"""
+    first = py_get(f"{SONG_LIST_API}?songType=1&songForm=1&currentPage=1&pageSize=10",
+                   cookies, timeout=20)
+    if first.get("baseResp", {}).get("errorCode") != 0:
+        raise RuntimeError("歌单首页返回错误: %s" % first.get("baseResp"))
+    d = first.get("data", {})
+    total = int(d.get("total") or 0)
+    pages = (total + 9) // 10
+    by_page = {1: d.get("songs", [])}
+
+    def fp(p):
+        for _ in range(3):
+            try:
+                j = py_get(f"{SONG_LIST_API}?songType=1&songForm=1&currentPage={p}&pageSize=10",
+                           cookies, timeout=20)
+                dd = j.get("data", {})
+                if j.get("baseResp", {}).get("errorCode") == 0:
+                    return p, dd.get("songs", [])
+            except Exception:
+                time.sleep(0.3)
+        return p, []
+
+    if pages > 1:
+        done = 0
+        with ThreadPoolExecutor(max_workers=20) as ex:
+            futs = {ex.submit(fp, p): p for p in range(2, pages + 1)}
+            for f in as_completed(futs):
+                p, songs = f.result()
+                if songs:
+                    by_page[p] = songs
+                done += 1
+                if log_prefix and done % 100 == 0:
+                    log(f"{log_prefix}清单翻页 {done}/{pages - 1}")
+    out = {}
+    for p in sorted(by_page):
+        for s in by_page[p]:
+            mid = s.get("metaSongId")
+            if mid and mid not in out:
+                out[str(mid)] = s
+    return out, total
+
+
 def refresh_yesterday(cookies):
-    log("\n[2/5] 刷新昨日汽水播放/热度 (period=1) ...")
+    log("\n[2/5] 刷新每日汽水播放/热度 ...")
     ids = load_song_ids()
     metrics, date = {}, None
     libmap = {}
@@ -511,6 +616,25 @@ def refresh_yesterday(cookies):
                                       it.get("artist") or it.get("作者") or it.get("singer") or "")
     except Exception:
         pass
+
+    # --- 新增：歌曲清单自带「最近一日播放」(lunaPlay1d)，一次翻页拿全 ---
+    listmap, list_total = {}, 0
+    try:
+        listmap, list_total = fetch_song_list(cookies)
+        log(f"    歌曲清单：{len(listmap)} 首（后台 total={list_total}），含「最近一日播放」新字段")
+        if list_total and list_total > len(ids):
+            log(f"    ⚠️ 后台歌曲数({list_total}) 多于本地清单({len(ids)})，"
+                f"建议点【重抓歌单(换账号)】以纳入新歌")
+    except Exception as e:
+        log(f"    (清单抓取失败，跳过最近一日数据) {e}")
+
+    ov_path = os.path.join(ACCT_DIR, "overview_1d.json")
+    old_date = None
+    if os.path.exists(ov_path):
+        try:
+            old_date = json.load(open(ov_path, encoding="utf-8")).get("date")
+        except Exception:
+            pass
 
     def fetch_one(sid):
         url = f"https://music.douyin.com/api/statistics/disclosure/overview?scope=2&songID={sid}&period=1"
@@ -524,38 +648,72 @@ def refresh_yesterday(cookies):
                 time.sleep(0.5)
         return sid, None, None
 
-    done = 0
-    with ThreadPoolExecutor(max_workers=20) as ex:
-        futs = {ex.submit(fetch_one, sid): sid for sid in ids}
-        for f in as_completed(futs):
-            sid, m, ut = f.result()
-            if m:
-                metrics[sid] = m
-                if ut:
-                    date = ut
-            done += 1
-            if done % 500 == 0:
-                log(f"    进度 {done}/{len(ids)}  已得 {len(metrics)}")
+    # 先看后台概览有没有出新的数据日期；没出就别白跑几千次请求
+    probe_sid = None
+    cached = {}
+    if os.path.exists(ov_path):
+        try:
+            cached = json.load(open(ov_path, encoding="utf-8"))
+        except Exception:
+            cached = {}
+    probe_sid = ids[0] if ids else None
+    _, _, new_ut = fetch_one(probe_sid) if probe_sid else (None, None, None)
+    if new_ut and old_date and str(new_ut) == str(old_date) and cached.get("metrics"):
+        metrics = dict(cached.get("metrics") or {})
+        date = cached.get("date")
+        log(f"    概览(period=1) 数据日期未变（{date}），沿用上次结果，跳过 {len(ids)} 次请求")
+    else:
+        done = 0
+        with ThreadPoolExecutor(max_workers=20) as ex:
+            futs = {ex.submit(fetch_one, sid): sid for sid in ids}
+            for f in as_completed(futs):
+                sid, m, ut = f.result()
+                if m:
+                    metrics[sid] = m
+                    if ut:
+                        date = ut
+                done += 1
+                if done % 500 == 0:
+                    log(f"    进度 {done}/{len(ids)}  已得 {len(metrics)}")
+
     json.dump({"date": date, "done": sorted(metrics.keys()), "metrics": metrics},
-              open(os.path.join(ACCT_DIR, "overview_1d.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+              open(ov_path, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     bj = (datetime.datetime.fromtimestamp(int(date), datetime.timezone.utc) + datetime.timedelta(hours=8)).strftime("%Y-%m-%d") if date else ""
+    # 清单的「最近一日」比概览 period=1 晚一天（后台口径：两者的 rate 互相印证）
+    nj = ""
+    if bj:
+        try:
+            nj = (datetime.datetime.strptime(bj, "%Y-%m-%d") + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+        except Exception:
+            nj = ""
+    if nj:
+        log(f"    概览数据日期(北京) = {bj} ｜ 清单最近一日 ≈ {nj}")
+
     rows = []
     for tid in ids:
         mm = metrics.get(tid)
-        if not mm:
+        ls = listmap.get(str(tid), {})
+        if not mm and not ls:
             continue
         nm, ar = libmap.get(tid, ("", ""))
-        rows.append([tid, nm, ar, mm.get("2"), mm.get("1"), mm.get("3"), bj])
+        latest = ls.get("lunaPlay1d")
+        rows.append([tid, nm or ls.get("title", ""), ar or ls.get("artistName", ""),
+                     (mm or {}).get("2"), (mm or {}).get("1"), (mm or {}).get("3"), bj,
+                     latest if latest is not None else "", nj,
+                     ls.get("lunaPlayAll", "")])
     for path in [os.path.join(ACCT_DIR, "汽水昨日数据.csv"),
                  os.path.join(ACCT_DIR, f"汽水昨日数据_{bj}.csv") if bj else None]:
         if not path:
             continue
         with open(path, "w", encoding="utf-8-sig", newline="") as f:
             w = csv.writer(f)
-            w.writerow(["track_id", "歌名", "作者", "昨日汽水播放量", "昨日汽水热度指数", "昨日付费播放指数", "数据日期"])
-            for tid, nm, ar, pl, ht, py, d in rows:
-                w.writerow([tid, nm, ar, pl if pl is not None else "", ht if ht is not None else "", py if py is not None else "", d])
-    log(f"    完成：{len(metrics)} 首 | 数据日期(北京)={bj}")
+            w.writerow(["track_id", "歌名", "作者", "当日播放量", "当日热度指数", "当日付费播放指数",
+                        "数据日期", "最近一日播放", "最近一日日期", "累计播放量"])
+            for r in rows:
+                w.writerow([r[0], r[1], r[2],
+                            r[3] if r[3] is not None else "", r[4] if r[4] is not None else "",
+                            r[5] if r[5] is not None else "", r[6], r[7], r[8], r[9]])
+    log(f"    完成：概览 {len(metrics)} 首 | 清单最近一日 {sum(1 for r in rows if r[7] != '')} 首")
     return bj
 
 
@@ -727,6 +885,16 @@ def run_update(reinit=False):
     reasons = need_bootstrap(ckm)
     if reinit:
         reasons = reasons or ["手动 --reinit"]
+    # 后台上架新歌时自动补抓（例如曲库从 3433 涨到 3650，不重抓就永远统计不到）
+    try:
+        _probe = py_get(f"{SONG_LIST_API}?songType=1&songForm=1&currentPage=1&pageSize=10",
+                        cookies, timeout=20)
+        _total = int((_probe.get("data") or {}).get("total") or 0)
+        _local = len(load_song_ids()) if os.path.exists(os.path.join(ACCT_DIR, "曲库索引.json")) else 0
+        if _total and _local and _total > _local:
+            reasons = reasons + [f"后台歌曲数增加：本地 {_local} → 后台 {_total}（+{_total - _local} 首新歌）"]
+    except Exception:
+        pass
     if reasons:
         log("  触发引导原因：" + "；".join(reasons))
         n = bootstrap_catalog(cookies, ckm)

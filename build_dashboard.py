@@ -2,7 +2,7 @@
 """
 汽水音乐数据 · 本地离线看板生成器
 ================================
-把已抓取的 CSV（昨日数据 / 月度收益 / 逐歌明细 / 歌曲累计）内嵌为一个
+把已抓取的 CSV（当日数据 / 月度收益 / 逐歌明细 / 歌曲累计）内嵌为一个
 自包含 HTML 看板，纯本地、零外部依赖、双击即开，不消耗任何模型 TOKEN。
 
 用法：python build_dashboard.py
@@ -35,7 +35,7 @@ def read_csv(path):
     with open(path, encoding='utf-8-sig', newline='') as f:
         return list(csv.DictReader(f))
 
-# ---------- 1. 昨日数据（稳定文件名，始终为最新一日） ----------
+# ---------- 1. 当日/最近一日数据（稳定文件名，始终为最新一日） ----------
 yest = read_csv(os.path.join(DATA_DIR, '汽水昨日数据.csv'))
 
 # 「付费播放」数据源：概览接口 metricType=3（汽水付费播放指数，与播放量同量纲）。
@@ -51,13 +51,18 @@ except Exception:
     pass
 
 yest_rows = []
-yest_date = yest[0]['数据日期'] if yest else ''
+# 列名兼容：新版 CSV 用「当日X」，旧版用「昨日汽水X」
+_yk = lambda r, new, old: (r.get(new) if r.get(new) not in (None, '') else r.get(old, ''))
+yest_date = (_yk(yest[0], '数据日期', '数据日期') if yest else '')
+yest_latest_date = (yest[0].get('最近一日日期') or '') if yest else ''
 yest_total_play = 0
 yest_total_hot = 0
+yest_total_latest = 0.0
 for r in yest:
-    play = num(r['昨日汽水播放量'])
-    hot = num(r['昨日汽水热度指数'])
-    _pr = r.get('昨日付费播放指数', '')
+    play = num(_yk(r, '当日播放量', '昨日汽水播放量'))
+    hot = num(_yk(r, '当日热度指数', '昨日汽水热度指数'))
+    latest = num(r.get('最近一日播放', ''))
+    _pr = _yk(r, '当日付费播放指数', '昨日付费播放指数')
     pay = num(_pr) if _pr not in ('', None) else _pay_map.get(str(r['track_id']), 0.0)
     # 极小量级时平台两指标口径不同，指数可能略高于总播放 —— 封顶保证 免费+付费=总播放
     if pay < 0:
@@ -67,6 +72,7 @@ for r in yest:
     free = max(0.0, play - pay)
     yest_total_play += play
     yest_total_hot += hot
+    yest_total_latest += latest
     yest_rows.append({
         'tid': r['track_id'],
         'name': r['歌名'],
@@ -75,6 +81,7 @@ for r in yest:
         'pay': pay,
         'free': free,
         'hot': hot,
+        'latest': latest,
     })
 yest_rows.sort(key=lambda x: x['play'], reverse=True)
 yest_total_pay = sum(x['pay'] for x in yest_rows)
@@ -240,6 +247,8 @@ DATA = {
     'yest_total_hot': yest_total_hot,
     'yest_total_pay': yest_total_pay,
     'yest_total_free': yest_total_free,
+    'yest_total_latest': yest_total_latest,
+    'yest_latest_date': yest_latest_date,
     'yest_rows': yest_rows,
     'monthly_summary': monthly_summary,
     'monthly_play': monthly_play,
@@ -291,6 +300,8 @@ header .meta{margin-top:6px;font-size:12.5px;opacity:.92}
   box-shadow:0 1px 3px rgba(20,40,80,.04)}
 .grid{display:grid;gap:14px}
 .g4{grid-template-columns:repeat(4,1fr)}
+.g5{grid-template-columns:repeat(5,1fr)}
+@media(max-width:1100px){.g5{grid-template-columns:repeat(2,1fr)}}
 .g3{grid-template-columns:repeat(3,1fr)}
 .g2{grid-template-columns:repeat(2,1fr)}
 .kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
@@ -338,12 +349,12 @@ footer{text-align:center;color:var(--sub);font-size:12px;padding:24px}
     <span class="badge">本地离线</span>
     <span class="badge">无需联网 / 模型 TOKEN</span>
     <span class="badge" id="genTime"></span>
-    数据快照：昨日 <b id="yestDate"></b> ｜ 结算月份 __MONTHS__
+    数据快照：当日 <b id="yestDate"></b> ｜ 结算月份 __MONTHS__
   </div>
 </header>
 <div class="tabs" id="tabs">
   <div class="tab active" data-p="overview">概览</div>
-  <div class="tab" data-p="yest">昨日播放 &amp; 热度</div>
+  <div class="tab" data-p="yest">当日播放 &amp; 热度</div>
   <div class="tab" data-p="monthly">月度收益汇总</div>
   <div class="tab" data-p="compare">播放 vs 收益</div>
   <div class="tab" data-p="detail">逐歌收益明细</div>
@@ -472,8 +483,8 @@ const renderers={
     const first=mp[0]||{play:0,sr:0,rpm:0};
     el.innerHTML=`
     <div class="grid g4">
-      <div class="kpi"><div class="v">${fmtK(DATA.yest_total_play)}</div><div class="l">昨日汽水总播放</div><div class="s">${DATA.yest_date}</div></div>
-      <div class="kpi"><div class="v">${fmtK(DATA.yest_total_hot)}</div><div class="l">昨日汽水总热度</div><div class="s">${DATA.yest_date}</div></div>
+      <div class="kpi"><div class="v">${fmtK(DATA.yest_total_play)}</div><div class="l">当日汽水总播放</div><div class="s">${DATA.yest_date}</div></div>
+      <div class="kpi"><div class="v">${fmtK(DATA.yest_total_hot)}</div><div class="l">当日汽水总热度</div><div class="s">${DATA.yest_date}</div></div>
       <div class="kpi"><div class="v">${yuan(DATA.total_revenue)}</div><div class="l">累计已结算收益</div><div class="s">${DATA.monthly_summary.length} 个月</div></div>
       <div class="kpi"><div class="v">${fmt(DATA.songs_with_rev)}</div><div class="l">有收益歌曲数</div><div class="s">累计榜</div></div>
     </div>
@@ -489,14 +500,17 @@ const renderers={
     const el=document.getElementById('p-yest');
     const payTot=DATA.yest_total_pay||0, freeTot=DATA.yest_total_free||0;
     const payRatio=DATA.yest_total_play>0?(payTot/DATA.yest_total_play*100):0;
+    const hasLatest=(DATA.yest_total_latest>0)&&DATA.yest_latest_date;
     el.innerHTML=`
-    <div class="grid g4">
-      <div class="kpi"><div class="v">${fmtK(DATA.yest_total_play)}</div><div class="l">昨日总播放</div><div class="s">${DATA.yest_date}</div></div>
+    <div class="grid ${hasLatest?'g5':'g4'}">
+      <div class="kpi"><div class="v">${fmtK(DATA.yest_total_play)}</div><div class="l">当日总播放</div><div class="s">${DATA.yest_date}</div></div>
       <div class="kpi"><div class="v" style="color:#e8920c">${fmtK(payTot)}</div><div class="l">其中 付费播放</div><div class="s">占 ${fmt(payRatio,1)}%</div></div>
       <div class="kpi"><div class="v" style="color:#13c2a2">${fmtK(freeTot)}</div><div class="l">其中 免费播放(推算)</div><div class="s">总播放 − 付费</div></div>
-      <div class="kpi"><div class="v">${fmtK(DATA.yest_total_hot)}</div><div class="l">昨日总热度</div><div class="s">${DATA.yest_date}</div></div>
+      <div class="kpi"><div class="v">${fmtK(DATA.yest_total_hot)}</div><div class="l">当日总热度</div><div class="s">${DATA.yest_date}</div></div>
+      ${hasLatest?`<div class="kpi"><div class="v" style="color:#4a7cf7">${fmtK(DATA.yest_total_latest)}</div><div class="l">最近一日播放<span class="pill">新</span></div><div class="s">${DATA.yest_latest_date}｜歌曲清单口径，与概览口径不同，仅看趋势</div></div>`:''}
     </div>
-    <div class="note" style="margin:14px 0">数据日期：<b>${DATA.yest_date}</b>（北京时间，单曲概览 period=1 近1天）。共 ${fmt(DATA.yest_rows.length)} 首。下表按「总播放」降序，可搜索歌名/作者。<br>
+    <div class="note" style="margin:14px 0">概览数据日期：<b>${DATA.yest_date}</b>（单曲概览 period=1，KPI 与「总播放/付费/免费/热度」均取此口径，彼此自洽）。共 ${fmt(DATA.yest_rows.length)} 首。下表按「总播放」降序，可搜索歌名/作者。<br>
+    ${hasLatest?`后台改版后<b>歌曲清单新增「最近一日播放」字段</b>（约 ${DATA.yest_latest_date}），比概览 period=1 新一天，但<b>两套口径不同、绝对值不可直接相加或比较</b>（概览与 7 日/月度结算自洽），该列仅供看单首歌的最新趋势。<br>`:''}
     「付费播放」取平台 <b>汽水付费播放指数</b>(metricType=3，与播放量同量纲)；「免费播放」= 总播放 − 付费播放（<b>推算值</b>）。极小量级歌曲两指标口径不同，付费可能略高于总播放，已封顶为总播放以保证 付费+免费=总播放。逐日真实「免费/付费播放量」计数平台未提供，月度真实计数见「月度收益汇总」「逐步收益明细」。</div>
     <div class="controls">
       <input type="text" id="yq" placeholder="搜索 歌名 / 作者">
@@ -505,12 +519,19 @@ const renderers={
     <div class="tblbox" id="ytbl"></div>`;
     const box=document.getElementById('ytbl');
     function draw(q=''){
+      const hasLatest=(DATA.yest_total_latest>0)&&DATA.yest_latest_date;
       const rows=DATA.yest_rows.filter(r=>!q||r.name.includes(q)||r.artist.includes(q))
-        .map(r=>[r.name,r.artist,fmt(r.play),fmt(r.pay),fmt(r.free),fmt(r.hot),r.tid]);
+        .map(r=>{
+          const base=[r.name,r.artist,fmt(r.play),fmt(r.pay),fmt(r.free),fmt(r.hot)];
+          return hasLatest?[...base,fmt(r.latest),r.tid]:[...base,r.tid];
+        });
       document.getElementById('yc').textContent='显示 '+rows.length+' 首';
+      const heads=hasLatest?['歌名','作者','总播放','付费播放','免费播放(推算)','热度指数','最近一日(清单口径)','track_id']
+                           :['歌名','作者','总播放','付费播放','免费播放(推算)','热度指数','track_id'];
+      const fmts=hasLatest?[null,null,(v)=>'<b>'+v+'</b>',(v)=>'<span style="color:#e8920c">'+v+'</span>',(v)=>'<span style="color:#13c2a2">'+v+'</span>',null,(v)=>'<span style="color:#4a7cf7">'+v+'</span>',(v)=>'<span class="pill">'+v+'</span>']
+                          :[null,null,(v)=>'<b>'+v+'</b>',(v)=>'<span style="color:#e8920c">'+v+'</span>',(v)=>'<span style="color:#13c2a2">'+v+'</span>',null,(v)=>'<span class="pill">'+v+'</span>'];
       box.innerHTML='';
-      box.appendChild(sortableTable(['歌名','作者','总播放','付费播放','免费播放(推算)','热度指数','track_id'],rows,
-        {fmt:[null,null,(v)=>'<b>'+v+'</b>',(v)=>'<span style="color:#e8920c">'+v+'</span>',(v)=>'<span style="color:#13c2a2">'+v+'</span>',null,(v)=>'<span class="pill">'+v+'</span>']}));
+      box.appendChild(sortableTable(heads,rows,{fmt:fmts}));
     }
     draw();
     document.getElementById('yq').oninput=e=>draw(e.target.value.trim());
@@ -793,7 +814,7 @@ with open(out, 'w', encoding='utf-8') as f:
     f.write(HTML)
 
 print('生成成功:', out)
-print('  昨日数据:', len(yest_rows), '首  日期', yest_date)
+print('  当日数据:', len(yest_rows), '首  日期', yest_date)
 print('  月度结算:', len(monthly_summary), '月  合计', round(total_revenue, 2), '元')
 print('  逐歌明细:', len(detail_rows), '行')
 print('  歌曲累计:', len(acc_rows), '首')
